@@ -1,0 +1,185 @@
+import pandas as pd
+import numpy as np
+from config import CONFIG
+from strategy.candlestick_patterns import PATTERN_STRENGTH
+from scipy.optimize import minimize_scalar
+
+class ATRStrategy:
+    """
+    Indicador/Estratégia ATR:
+    - Cálculo preciso de True Range e ATR
+    - Otimização automática do período do ATR
+    - Bandas dinâmicas de volatilidade (ATR bands)
+    - Detecção de squeeze (contração de volatilidade)
+    - Sinais de breakout com confirmação de volume
+    - Boost por padrões de vela relevantes
+    - Gestão de risco (stop/take)
+    - Position sizing
+    - Compatível com pipeline universal (features_df)
+    """
+
+    def __init__(self, config=None):
+        config = config or {}
+        self.atr_period = config.get('atr_period', 14)
+        self.multiplier = config.get('multiplier', 1.2)
+        self.volume_threshold = config.get('volume_threshold', 1.5)
+        self.min_confidence = config.get('min_confidence', 65)
+        self.pattern_boost = config.get('pattern_boost', 0.2)
+        self.band_multiplier = config.get('band_multiplier', 2.0)
+        self.position_risk_pct = config.get('position_risk_pct', 0.02)  # 2% padrão
+        self.risk_reward_ratio = config.get('risk_reward_ratio', 1.5)
+        self.period_min = config.get('period_min', 5)
+        self.period_max = config.get('period_max', 50)
+
+    def _calculate_true_range(self, high, low, close):
+        tr = pd.DataFrame({
+            'high_low': high - low,
+            'high_close': (high - close.shift(1)).abs(),
+            'low_close': (low - close.shift(1)).abs()
+        }).max(axis=1)
+        return tr
+
+    def optimize_atr_period(self, high, low, close, min_period=5, max_period=50):
+        """
+        Otimiza período do ATR para volatilidade atual (minimiza variância do ATR).
+        """
+        def objective(period):
+            period = int(round(period))
+            tr = self._calculate_true_range(high, low, close)
+            atr = tr.rolling(window=period).mean()
+            return atr.dropna().var()
+        result = minimize_scalar(objective, bounds=(min_period, max_period), method='bounded')
+        return int(round(result.x))
+
+    def _apply_pattern_boost(self, signal, patterns, direction):
+        if not patterns or not direction:
+            return signal
+        if direction == "up":
+            relevant_patterns = CONFIG["candlestick_patterns"]["reversal_up"] + CONFIG["candlestick_patterns"]["trend_up"]
+        elif direction == "down":
+            relevant_patterns = CONFIG["candlestick_patterns"]["reversal_down"] + CONFIG["candlestick_patterns"]["trend_down"]
+        else:
+            relevant_patterns = []
+        pattern_strength = sum(PATTERN_STRENGTH.get(p, 0.1) for p in patterns if p in relevant_patterns)
+        if pattern_strength > 0:
+            signal["confidence"] = min(95, signal.get("confidence", 65) + int(pattern_strength * 20 * self.pattern_boost))
+            signal["patterns"] = patterns
+            signal["pattern_strength"] = pattern_strength
+        return signal
+
+    def position_sizing(self, account_balance, risk_per_trade, stop_loss_distance):
+        """
+        Tamanho de posição baseado no risco.
+        """
+        if stop_loss_distance <= 0:
+            return 0
+        position_size = (account_balance * risk_per_trade) / stop_loss_distance
+        return round(position_size, 2)
+
+    def generate_signal(self, features_df, account_balance=None):
+        try:
+            if features_df is None or features_df.empty or len(features_df) < self.period_min + 2:
+                return None
+
+            # ATR otimizado
+            high = features_df["high"]
+            low = features_df["low"]
+            close = features_df["close"]
+            volume = features_df["volume"]
+
+            atr_period_opt = self.optimize_atr_period(high, low, close, self.period_min, self.period_max)
+            tr = self._calculate_true_range(high, low, close)
+            atr_series = tr.rolling(window=atr_period_opt).mean()
+            atr = atr_series.iloc[-1]
+
+            last = features_df.iloc[-1]
+            prev = features_df.iloc[-2] if len(features_df) > 1 else last
+
+            body_size = abs(last["close"] - last["open"])
+            is_bullish = last["close"] > last["open"]
+
+            # ATR bands
+            upper_band = last["close"] + atr * self.band_multiplier
+            lower_band = last["close"] - atr * self.band_multiplier
+            prev_close = prev["close"]
+
+            # Squeeze (ATR atual < média ATR * 0.8)
+            atr_window_mean = atr_series.rolling(window=20).mean().iloc[-1]
+            squeeze = atr < atr_window_mean * 0.8 if atr_window_mean and not np.isnan(atr_window_mean) else False
+
+            signal = None
+            event = ""
+            if last["close"] > upper_band and prev_close <= upper_band:
+                signal = "up"
+                event = "atr_band_breakout_up"
+            elif last["close"] < lower_band and prev_close >= lower_band:
+                signal = "down"
+                event = "atr_band_breakout_down"
+            elif body_size > atr * self.multiplier:
+                signal = "up" if is_bullish else "down"
+                event = "atr_body_breakout_" + signal
+
+            # Força dinâmica
+            if self.period_min == 1:
+                avg_vol = volume
+            else:
+                avg_vol = features_df.iloc[-atr_period_opt:-1]["volume"].mean()
+            vol_ok = last["volume"] > avg_vol * self.volume_threshold if avg_vol > 0 else False
+            strength = "weak"
+            if signal:
+                if vol_ok:
+                    strength = "strong_volume"
+                elif abs(last["close"] - (upper_band if signal == "up" else lower_band)) > atr * 0.5:
+                    strength = "strong_distance"
+                elif squeeze:
+                    strength = "squeeze"
+
+            # Confiança
+            confidence = 65
+            if strength.startswith("strong") or strength == "squeeze":
+                confidence = 80
+            elif signal is not None:
+                confidence = 70
+
+            patterns = last.get("patterns", [])
+            result = {
+                "signal": signal,
+                "event": event,
+                "confidence": confidence,
+                "strength": strength,
+                "atr": round(atr, 5),
+                "atr_period_opt": atr_period_opt,
+                "body_ratio": round(body_size / atr, 2),
+                "price": last["close"],
+                "volume": last["volume"],
+                "vol_ok": vol_ok,
+                "upper_band": round(upper_band, 5),
+                "lower_band": round(lower_band, 5),
+                "squeeze": squeeze,
+                "pattern_strength": None,
+            }
+            result = self._apply_pattern_boost(result, patterns, signal)
+
+            # Recomendação de stop baseada no ATR
+            if signal == "up":
+                recommend_stop = last["low"] - atr * 0.5
+            elif signal == "down":
+                recommend_stop = last["high"] + atr * 0.5
+            else:
+                recommend_stop = None
+            result.update({
+                "recommend_entry": last["close"],
+                "recommend_stop": recommend_stop
+            })
+
+            # Position sizing (se passar account_balance)
+            if account_balance and recommend_stop and signal:
+                stop_distance = abs(last["close"] - recommend_stop)
+                pos_size = self.position_sizing(account_balance, self.position_risk_pct, stop_distance)
+                result["position_size"] = pos_size
+
+            return result if (signal and result["confidence"] >= self.min_confidence) else None
+
+        except Exception as e:
+            print(f"ATRStrategy error: {e}")
+            return None

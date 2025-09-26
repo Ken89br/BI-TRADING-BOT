@@ -1,0 +1,200 @@
+def _find_liquidity_zones(self, df: pd.DataFrame, params: dict, pair: str = "", operation_type: str = "daytrade") -> dict:
+    """
+    Detecta zonas de liquidez (order blocks) com mitigação, força adaptativa
+    e opção de range configurável.
+    """
+    logger.debug(f"Buscando zonas de liquidez para {pair} ({operation_type})")
+    
+    # --------- CACHE CHECK ---------
+    cache_key = make_cache_key(pair, f"liqzones_{operation_type}", params, cache_namespace="sr")
+    cached = global_cache.get(cache_key)
+    if cached is not None:
+        logger.debug("Retornando zonas de liquidez do cache")
+        return cached
+    # -------------------------------
+    
+    # Defensive checks
+    if df is None or df.empty:
+        logger.warning("DataFrame vazio para zonas de liquidez")
+        return {'zones': []}
+
+    try:
+        # Work on a copy to avoid side-effects
+        df = df.copy()
+
+        # Required price columns
+        required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        if not all(col in df.columns for col in required_cols):
+            logger.warning("Colunas necessárias não encontradas no DataFrame")
+            return {'zones': []}
+
+        # Ensure Date column
+        if 'Date' not in df.columns:
+            if 'timestamp' in df.columns:
+                df['Date'] = pd.to_datetime(df['timestamp'], unit='s', errors='coerce')
+            else:
+                try:
+                    df['Date'] = pd.to_datetime(df.index)
+                except Exception:
+                    df['Date'] = pd.to_datetime(df.index, errors='coerce')
+
+        # Força tipos numéricos
+        for c in required_cols:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+        df[['Open', 'High', 'Low', 'Close', 'Volume']] = df[['Open', 'High', 'Low', 'Close', 'Volume']].ffill().bfill()
+
+        # Params com defaults
+        vol_ma_period = int(params.get('vol_ma_period', 20))
+        liquidity_threshold = float(params.get('liquidity_threshold', 1.5))
+        range_mode = params.get('range_mode', 'body')
+        min_strength = float(params.get('min_strength', 0.8))
+        mitigation_lookahead = params.get('mitigation_lookahead', None)
+        max_zones = int(params.get('max_zones', 5))
+
+        logger.debug(f"Parâmetros: vol_ma_period={vol_ma_period}, liquidity_threshold={liquidity_threshold}, range_mode={range_mode}")
+
+        # Confluence levels
+        ref_levels = [params.get("use_vwap"), params.get("use_pivot")]
+        ref_levels = [lvl for lvl in ref_levels if lvl is not None and not (isinstance(lvl, float) and np.isnan(lvl))]
+
+        # Volume moving average
+        vol_ma = df['Volume'].rolling(window=vol_ma_period, min_periods=1).mean().replace(0, 1).fillna(1)
+
+        liquidity_zones = []
+        n = len(df)
+
+        logger.debug(f"Analisando {n} candles para zonas de liquidez")
+
+        # Percorre candles com espaço para olhar adiante
+        for i in range(3, n - 2):
+            open_i = df['Open'].iat[i]
+            close_i = df['Close'].iat[i]
+            high_i = df['High'].iat[i]
+            low_i = df['Low'].iat[i]
+            close_i1 = df['Close'].iat[i + 1]
+            close_i2 = df['Close'].iat[i + 2]
+
+            current_vol = df['Volume'].iat[i]
+            vol_ma_i = vol_ma.iat[i] if not np.isnan(vol_ma.iat[i]) else 1.0
+            vol_ma_i = max(vol_ma_i, 1e-9)
+
+            # Filtro simples de volume acima da média
+            if current_vol <= vol_ma_i * liquidity_threshold:
+                continue
+
+            # Bullish Order Block (OB)
+            if (close_i < open_i) and (close_i1 > high_i) and (close_i2 > high_i):
+                if range_mode == "body":
+                    zone_low = min(low_i, open_i)
+                    zone_high = max(low_i, open_i)
+                else:
+                    zone_low = low_i
+                    zone_high = high_i
+
+                breakout_strength = 0.0
+                if abs(high_i) > 1e-9:
+                    breakout_strength = (close_i1 - high_i) / abs(high_i)
+
+                strength = 0.5 * (current_vol / vol_ma_i) + 0.3 * breakout_strength
+
+                if ref_levels:
+                    dists = []
+                    for lvl in ref_levels:
+                        if lvl and abs(lvl) > 1e-9:
+                            dists.append(abs(close_i - lvl) / abs(lvl))
+                    if dists:
+                        dist = min(dists)
+                        strength += max(0, 0.2 * (1 - dist))
+
+                strength = max(0.0, float(strength))
+
+                liquidity_zones.append({
+                    'type': 'bullish',
+                    'range': (round(zone_low, 8), round(zone_high, 8)),
+                    'price': round(zone_low, 8),
+                    'time': pd.to_datetime(df['Date'].iat[i]),
+                    'index': int(i),
+                    'volume': float(current_vol),
+                    'strength': round(strength, 3)
+                })
+
+            # Bearish Order Block (OB)
+            elif (close_i > open_i) and (close_i1 < low_i) and (close_i2 < low_i):
+                if range_mode == "body":
+                    zone_low = open_i
+                    zone_high = high_i
+                else:
+                    zone_low = low_i
+                    zone_high = high_i
+
+                breakout_strength = 0.0
+                if abs(low_i) > 1e-9:
+                    breakout_strength = (low_i - close_i1) / abs(low_i)
+
+                strength = 0.5 * (current_vol / vol_ma_i) + 0.3 * breakout_strength
+
+                if ref_levels:
+                    dists = []
+                    for lvl in ref_levels:
+                        if lvl and abs(lvl) > 1e-9:
+                            dists.append(abs(close_i - lvl) / abs(lvl))
+                    if dists:
+                        dist = min(dists)
+                        strength += max(0, 0.2 * (1 - dist))
+
+                strength = max(0.0, float(strength))
+
+                liquidity_zones.append({
+                    'type': 'bearish',
+                    'range': (round(zone_low, 8), round(zone_high, 8)),
+                    'price': round(zone_high, 8),
+                    'time': pd.to_datetime(df['Date'].iat[i]),
+                    'index': int(i),
+                    'volume': float(current_vol),
+                    'strength': round(strength, 3)
+                })
+
+        # Mitigação: remove zonas que foram tocadas depois
+        non_mitigated = []
+        for z in liquidity_zones:
+            start_idx = z.get('index', None)
+            if start_idx is None:
+                non_mitigated.append(z)
+                continue
+
+            lookahead_end = n if mitigation_lookahead is None else min(n, start_idx + 1 + int(mitigation_lookahead))
+            after_zone = df.iloc[start_idx + 1: lookahead_end]
+
+            if after_zone.empty:
+                non_mitigated.append(z)
+                continue
+
+            zone_low, zone_high = float(z['range'][0]), float(z['range'][1])
+            touched_mask = (after_zone['Low'] <= zone_high) & (after_zone['High'] >= zone_low)
+            touched = touched_mask.any()
+
+            if not touched:
+                non_mitigated.append(z)
+
+        # Filtrar por força mínima
+        strong_zones = [z for z in non_mitigated if z.get('strength', 0) >= min_strength]
+        strong_zones = sorted(strong_zones, key=lambda x: x['time'])
+        result = {'zones': strong_zones[-max_zones:]}
+
+        logger.debug(f"Zonas de liquidez encontradas: {len(result['zones'])} (força >= {min_strength})")
+
+        # Cache
+        expiry_map = {
+            'scalping': 300,
+            'daytrade': 900,
+            'swing': 3600,
+            'position': 21600
+        }
+        expiry = expiry_map.get(operation_type, 900)
+        global_cache.set(cache_key, result, expiry=expiry)
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Erro na detecção de zonas de liquidez: {e}", exc_info=True)
+        return {'zones': []}

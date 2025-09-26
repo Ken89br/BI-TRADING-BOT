@@ -1,0 +1,445 @@
+import pandas as pd
+import numpy as np
+import ta
+from typing import Tuple, Dict, Union, List
+from scipy.optimize import minimize_scalar
+
+class TechnicalIndicators:
+    """
+    Agregador avançado de indicadores técnicos com:
+    - Cálculos mais robustos
+    - Novos indicadores importantes
+    - Melhor tratamento de edge cases
+    - Saídas padronizadas
+    """
+    
+    # ============== INDICADORES EXISTENTES (MANTIDOS INALTERADOS) ==============
+    
+    @staticmethod
+    def calc_rsi(close: pd.Series, period: int = 14) -> Dict[str, float]:
+        """Calcula RSI com validação e dados adicionais"""
+        if len(close) < period:
+            raise ValueError(f"Necessário mínimo {period} períodos para RSI")
+            
+        rsi = ta.momentum.RSIIndicator(close, window=period).rsi()
+        return {
+            'value': round(rsi.iloc[-1], 2),
+            'zone': 'overbought' if rsi.iloc[-1] > 70 else 
+                   'oversold' if rsi.iloc[-1] < 30 else 'neutral',
+            'trend': 'up' if rsi.iloc[-1] > rsi.iloc[-2] else 'down'
+        }
+
+    @staticmethod
+    def calc_macd(close: pd.Series, 
+                 fast: int = 12, 
+                 slow: int = 26, 
+                 signal: int = 9) -> Dict[str, float]:
+        """Retorna MACD com análise de momentum"""
+        macd = ta.trend.MACD(close, window_fast=fast, window_slow=slow, window_sign=signal)
+        return {
+            'histogram': round(macd.macd_diff().iloc[-1], 5),
+            'macd_line': round(macd.macd().iloc[-1], 5),
+            'signal_line': round(macd.macd_signal().iloc[-1], 5),
+            'momentum': 'bullish' if macd.macd_diff().iloc[-1] > 0 else 'bearish'
+        }
+
+    @staticmethod
+    def calc_bollinger(close: pd.Series, period: int = 20, std_dev: int = 2) -> Dict[str, float]:
+        """Bandas de Bollinger com mais métricas"""
+        bb = ta.volatility.BollingerBands(close, window=period, window_dev=std_dev)
+        return {
+            'upper': round(bb.bollinger_hband().iloc[-1], 5),
+            'lower': round(bb.bollinger_lband().iloc[-1], 5),
+            'width': round(bb.bollinger_wband().iloc[-1], 5),
+            'percent_b': round(bb.bollinger_pband().iloc[-1], 5),
+            'position': 'squeeze' if bb.bollinger_wband().iloc[-1] < 0.5 else 'normal'
+        }
+
+    @staticmethod
+    def calc_atr_advanced(high: pd.Series, low: pd.Series, close: pd.Series, min_period: int = 5, max_period: int = 50) -> Dict[str, float]:
+        """
+        ATR institucional: True Range + otimização automática do período + squeeze + bandas.
+        """
+        # True Range
+        tr = pd.DataFrame({
+            'high_low': high - low,
+            'high_close': (high - close.shift(1)).abs(),
+            'low_close': (low - close.shift(1)).abs()
+        }).max(axis=1)
+        # Otimização do período
+        def objective(period):
+            period = int(round(period))
+            atr = tr.rolling(window=period).mean()
+            return atr.dropna().var()
+        result = minimize_scalar(objective, bounds=(min_period, max_period), method='bounded')
+        period_opt = int(round(result.x))
+        atr_series = tr.rolling(window=period_opt).mean()
+        atr = atr_series.iloc[-1]
+        # Squeeze
+        atr_window_mean = atr_series.rolling(window=20).mean().iloc[-1]
+        squeeze = atr < atr_window_mean * 0.8 if atr_window_mean and not np.isnan(atr_window_mean) else False
+        # Bandas
+        close_last = close.iloc[-1]
+        upper_band = close_last + atr * 2
+        lower_band = close_last - atr * 2
+
+        return {
+            'value': round(atr, 5),
+            'period_opt': period_opt,
+            'ratio': round(atr / close_last * 100, 2),
+            'trend': 'rising' if atr > atr_series.iloc[-2] else 'falling',
+            'squeeze': squeeze,
+            'upper_band': round(upper_band, 5),
+            'lower_band': round(lower_band, 5)
+        }
+
+    @staticmethod
+    def calc_adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> Dict[str, float]:
+        """ADX completo com DI+ e DI-"""
+        adx = ta.trend.ADXIndicator(high, low, close, window=period)
+        return {
+            'adx': round(adx.adx().iloc[-1], 2),
+            'di_plus': round(adx.adx_pos().iloc[-1], 2),
+            'di_minus': round(adx.adx_neg().iloc[-1], 2),
+            'strength': 'strong' if adx.adx().iloc[-1] > 25 else 'weak'
+        }
+
+    @staticmethod
+    def calc_ichimoku(high: pd.Series, low: pd.Series, close: pd.Series) -> Dict[str, float]:
+        """Ichimoku Cloud completo"""
+        ichi = ta.trend.IchimokuIndicator(high, low)
+        return {
+            'conversion': round(ichi.ichimoku_conversion_line().iloc[-1], 5),
+            'base': round(ichi.ichimoku_base_line().iloc[-1], 5),
+            'leading_a': round(ichi.ichimoku_a().iloc[-1], 5),
+            'leading_b': round(ichi.ichimoku_b().iloc[-1], 5),
+            'cloud_position': 'above' if close.iloc[-1] > ichi.ichimoku_a().iloc[-1] else 'below'
+        }
+
+    @staticmethod
+    def calc_fibonacci(high: pd.Series, low: pd.Series) -> Dict[str, float]:
+        """Níveis de Fibonacci Retracement"""
+        diff = high.max() - low.min()
+        return {
+            '23.6%': round(high.max() - diff * 0.236, 5),
+            '38.2%': round(high.max() - diff * 0.382, 5),
+            '50%': round(high.max() - diff * 0.5, 5),
+            '61.8%': round(high.max() - diff * 0.618, 5)
+        }
+
+    @staticmethod
+    def calc_supertrend(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 7, multiplier: int = 3) -> Dict[str, Union[float, str]]:
+        """Supertrend com sinal direcional"""
+        st = ta.trend.SuperTrendIndicator(high, low, close, window=period, multiplier=multiplier)
+        return {
+            'value': round(st.super_trend().iloc[-1], 5),
+            'direction': 'up' if st.super_trend_direction().iloc[-1] == 1 else 'down',
+            'changed': st.super_trend_direction().iloc[-1] != st.super_trend_direction().iloc[-2]
+        }
+
+    @staticmethod
+    def get_market_profile(close: pd.Series, volume: pd.Series, bins: int = 20) -> Dict[str, float]:
+        """Perfil de mercado baseado em volume"""
+        hist, bin_edges = np.histogram(close, bins=bins, weights=volume)
+        return {
+            'poc': round(bin_edges[np.argmax(hist)], 5),  # Point of Control
+            'value_area': {
+                'low': round(bin_edges[np.argsort(hist)[-3]], 5),  # 3º maior
+                'high': round(bin_edges[np.argsort(hist)[-1]], 5)   # 1º maior
+            }
+        }
+
+    # ============== NOVOS INDICADORES ADICIONADOS ==============
+
+    @staticmethod
+    def calc_stochastic(high: pd.Series, low: pd.Series, close: pd.Series, 
+                       k_period: int = 14, d_period: int = 3) -> Dict[str, Union[float, str]]:
+        """Stochastic Oscillator com análise completa"""
+        stoch = ta.momentum.StochasticOscillator(
+            high=high, low=low, close=close, 
+            window=k_period, smooth_window=d_period
+        )
+        return {
+            'k_line': round(stoch.stoch().iloc[-1], 2),
+            'd_line': round(stoch.stoch_signal().iloc[-1], 2),
+            'state': 'overbought' if stoch.stoch().iloc[-1] > 80 else 
+                    'oversold' if stoch.stoch().iloc[-1] < 20 else 'neutral',
+            'cross': 'bullish' if stoch.stoch().iloc[-1] > stoch.stoch_signal().iloc[-1] and 
+                                stoch.stoch().iloc[-2] <= stoch.stoch_signal().iloc[-2] else
+                    'bearish' if stoch.stoch().iloc[-1] < stoch.stoch_signal().iloc[-1] and 
+                                stoch.stoch().iloc[-2] >= stoch.stoch_signal().iloc[-2] else 'none'
+        }
+
+    @staticmethod
+    def calc_cci(high: pd.Series, low: pd.Series, close: pd.Series, 
+                period: int = 20) -> Dict[str, Union[float, str]]:
+        """Commodity Channel Index com análise detalhada"""
+        cci = ta.trend.CCIIndicator(high=high, low=low, close=close, window=period)
+        current_cci = cci.cci().iloc[-1]
+        return {
+            'value': round(current_cci, 2),
+            'state': 'overbought' if current_cci > 100 else 
+                    'oversold' if current_cci < -100 else 'neutral',
+            'momentum': 'rising' if current_cci > cci.cci().iloc[-2] else 'falling',
+            'strength': 'extreme' if abs(current_cci) > 200 else
+                        'strong' if abs(current_cci) > 150 else
+                        'moderate' if abs(current_cci) > 100 else 'weak'
+        }
+
+    @staticmethod
+    def calc_williams_r(high: pd.Series, low: pd.Series, close: pd.Series, 
+                       period: int = 14) -> Dict[str, Union[float, str]]:
+        """Williams %R com análise contextual"""
+        williams = ta.momentum.WilliamsRIndicator(high=high, low=low, close=close, lbp=period)
+        current_wr = williams.williams_r().iloc[-1]
+        return {
+            'value': round(current_wr, 2),
+            'state': 'overbought' if current_wr > -20 else 
+                    'oversold' if current_wr < -80 else 'neutral',
+            'trend': 'bullish' if current_wr > williams.williams_r().iloc[-2] else 'bearish'
+        }
+
+    @staticmethod
+    def calc_parabolic_sar(high: pd.Series, low: pd.Series, 
+                          step: float = 0.02, max_step: float = 0.2) -> Dict[str, Union[float, str]]:
+        """Parabolic SAR com análise de tendência"""
+        psar = ta.trend.PSARIndicator(
+            high=high, low=low, close=pd.Series((high + low)/2),  # Usa média HL como close
+            step=step, max_step=max_step
+        )
+        current_sar = psar.psar().iloc[-1]
+        return {
+            'value': round(current_sar, 5),
+            'trend': 'up' if current_sar < high.iloc[-1] else 'down',
+            'acceleration': 'increasing' if psar.psar_up().iloc[-1] > psar.psar_up().iloc[-2] else
+                           'decreasing' if psar.psar_up().iloc[-1] < psar.psar_up().iloc[-2] else 'steady'
+        }
+
+    @staticmethod
+    def calc_momentum(close: pd.Series, period: int = 10) -> Dict[str, Union[float, str]]:
+        """Momentum com análise detalhada"""
+        mom = ta.momentum.ROCIndicator(close=close, window=period)
+        current_mom = mom.roc().iloc[-1]
+        return {
+            'value': round(current_mom, 2),
+            'trend': 'up' if current_mom > 0 else 'down',
+            'acceleration': 'increasing' if current_mom > mom.roc().iloc[-2] else 'decreasing',
+            'strength': 'strong' if abs(current_mom) > 10 else
+                       'moderate' if abs(current_mom) > 5 else 'weak'
+        }
+
+    @staticmethod
+    def calc_roc(close: pd.Series, period: int = 12) -> Dict[str, Union[float, str]]:
+        """Rate of Change (ROC) com análise contextual"""
+        roc = ta.momentum.ROCIndicator(close=close, window=period)
+        current_roc = roc.roc().iloc[-1]
+        return {
+            'value': round(current_roc, 2),
+            'trend': 'up' if current_roc > 0 else 'down',
+            'momentum': 'accelerating' if abs(current_roc) > abs(roc.roc().iloc[-2]) else 'decelerating',
+            'extreme': 'high' if current_roc > 15 else
+                       'low' if current_roc < -15 else 'normal'
+        }
+
+    @staticmethod
+    def calc_dmi(high: pd.Series, low: pd.Series, close: pd.Series, 
+                period: int = 14) -> Dict[str, Union[float, str]]:
+        """Directional Movement Index (DMI) completo"""
+        dmi = ta.trend.DMIIndicator(high=high, low=low, close=close, window=period)
+        return {
+            'adx': round(dmi.adx().iloc[-1], 2),
+            'plus_di': round(dmi.plus_di().iloc[-1], 2),
+            'minus_di': round(dmi.minus_di().iloc[-1], 2),
+            'trend': 'strong_up' if dmi.adx().iloc[-1] > 25 and dmi.plus_di().iloc[-1] > dmi.minus_di().iloc[-1] else
+                    'strong_down' if dmi.adx().iloc[-1] > 25 and dmi.plus_di().iloc[-1] < dmi.minus_di().iloc[-1] else
+                    'weak_up' if dmi.plus_di().iloc[-1] > dmi.minus_di().iloc[-1] else 'weak_down',
+            'crossover': 'bullish' if dmi.plus_di().iloc[-1] > dmi.minus_di().iloc[-1] and 
+                                    dmi.plus_di().iloc[-2] <= dmi.minus_di().iloc[-2] else
+                        'bearish' if dmi.plus_di().iloc[-1] < dmi.minus_di().iloc[-1] and 
+                                    dmi.plus_di().iloc[-2] >= dmi.minus_di().iloc[-2] else 'none'
+        }
+
+    @staticmethod
+    def calc_vwap(high: pd.Series, low: pd.Series, close: pd.Series, 
+                 volume: pd.Series) -> Dict[str, Union[float, str]]:
+        """Volume Weighted Average Price (VWAP) com análise"""
+        typical_price = (high + low + close) / 3
+        vwap = (typical_price * volume).cumsum() / volume.cumsum()
+        current_vwap = vwap.iloc[-1]
+        return {
+            'value': round(current_vwap, 5),
+            'relation': 'above' if close.iloc[-1] > current_vwap else 'below',
+            'spread': round(abs(close.iloc[-1] - current_vwap) / current_vwap * 100, 2),
+            'trend': 'rising' if current_vwap > vwap.iloc[-2] else 'falling'
+        }
+
+    @staticmethod
+    def calc_envelope(close: pd.Series, period: int = 20, 
+                     deviation: float = 0.05) -> Dict[str, Union[float, str]]:
+        """Envelope Channels com análise completa"""
+        sma = close.rolling(window=period).mean()
+        upper = sma * (1 + deviation)
+        lower = sma * (1 - deviation)
+        return {
+            'upper': round(upper.iloc[-1], 5),
+            'lower': round(lower.iloc[-1], 5),
+            'center': round(sma.iloc[-1], 5),
+            'position': 'above' if close.iloc[-1] > upper.iloc[-1] else 
+                       'below' if close.iloc[-1] < lower.iloc[-1] else 'within',
+            'band_width': round(upper.iloc[-1] - lower.iloc[-1], 5),
+            'percent_from_center': round((close.iloc[-1] - sma.iloc[-1]) / sma.iloc[-1] * 100, 2)
+        }
+
+    @staticmethod
+    def calc_elliott_wave(close: pd.Series, lookback: int = 50) -> Dict[str, Union[str, List[float]]]:
+        """Análise simplificada de Elliott Wave"""
+        if len(close) < lookback:
+            return {'error': 'Not enough data'}
+            
+        window = close.iloc[-lookback:]
+        peaks = window[(window.shift(1) < window) & (window.shift(-1) < window)]
+        troughs = window[(window.shift(1) > window) & (window.shift(-1) > window)]
+        
+        # Identificação básica de ondas
+        wave_counts = {
+            'impulse_waves': len(peaks),
+            'corrective_waves': len(troughs),
+            'wave_ratios': []
+        }
+        
+        if len(peaks) >= 2 and len(troughs) >= 1:
+            for i in range(1, len(peaks)):
+                wave_high = peaks.iloc[i]
+                wave_low = troughs.iloc[i-1] if i <= len(troughs) else peaks.iloc[i-1]
+                ratio = (wave_high - wave_low) / (peaks.iloc[0] - troughs.iloc[0]) if len(troughs) > 0 else 0
+                wave_counts['wave_ratios'].append(round(ratio, 2))
+        
+        return {
+            'peaks': peaks.tolist(),
+            'troughs': troughs.tolist(),
+            'phase': 'impulse' if len(peaks) >= 3 else 'correction',
+            'wave_counts': wave_counts
+        }
+
+    @staticmethod
+    def calc_zigzag(close: pd.Series, percent: float = 5) -> Dict[str, Union[List[float], str]]:
+        """Zig Zag Indicator com análise de tendência"""
+        peaks = []
+        troughs = []
+        last_pivot = close.iloc[0]
+        trend = None
+        
+        for i in range(1, len(close)):
+            if close.iloc[i] >= last_pivot * (1 + percent/100):
+                if trend != 'up':
+                    troughs.append(last_pivot)
+                    trend = 'up'
+                last_pivot = close.iloc[i]
+            elif close.iloc[i] <= last_pivot * (1 - percent/100):
+                if trend != 'down':
+                    peaks.append(last_pivot)
+                    trend = 'down'
+                last_pivot = close.iloc[i]
+        
+        # Análise de padrões
+        pattern = None
+        if len(peaks) >= 2 and len(troughs) >= 2:
+            if peaks[-1] > peaks[-2] and troughs[-1] > troughs[-2]:
+                pattern = 'higher_highs_higher_lows'
+            elif peaks[-1] < peaks[-2] and troughs[-1] < troughs[-2]:
+                pattern = 'lower_highs_lower_lows'
+            elif peaks[-1] > peaks[-2] and troughs[-1] < troughs[-2]:
+                pattern = 'broadening'
+        
+        return {
+            'peaks': peaks[-3:],  # Últimos 3 picos
+            'troughs': troughs[-3:],  # Últimos 3 vales
+            'trend': trend,
+            'pattern': pattern,
+            'retracements': [round((peaks[i] - troughs[i]) / peaks[i] * 100, 2) 
+                            for i in range(min(len(peaks), len(troughs)))]
+        }
+
+    # ============== FUNÇÕES AUXILIARES PARA ANÁLISE DE CONTEXTO ==============
+
+    @staticmethod
+    def get_trend_context(close: pd.Series, period: int = 14) -> Dict[str, Union[float, str]]:
+        """Analisa múltiplos fatores para determinar o contexto da tendência"""
+        rsi = TechnicalIndicators.calc_rsi(close, period)
+        macd = TechnicalIndicators.calc_macd(close)
+        adx = TechnicalIndicators.calc_adx(close, close, close, period)
+        stoch = TechnicalIndicators.calc_stochastic(close, close, close, period, 3)
+        
+        score = 0
+        factors = []
+        
+        # RSI
+        if rsi['zone'] == 'overbought': score -= 1; factors.append('rsi_overbought')
+        elif rsi['zone'] == 'oversold': score += 1; factors.append('rsi_oversold')
+        if rsi['trend'] == 'up': score += 0.5; factors.append('rsi_up')
+        else: score -= 0.5; factors.append('rsi_down')
+        
+        # MACD
+        if macd['momentum'] == 'bullish': score += 1; factors.append('macd_bullish')
+        else: score -= 1; factors.append('macd_bearish')
+        
+        # ADX
+        if adx['strength'] == 'strong': score += 1.5; factors.append('adx_strong')
+        if adx['trend'] == 'up': score += 0.5; factors.append('adx_up')
+        else: score -= 0.5; factors.append('adx_down')
+        
+        # Stochastic
+        if stoch['state'] == 'overbought': score -= 1; factors.append('stoch_overbought')
+        elif stoch['state'] == 'oversold': score += 1; factors.append('stoch_oversold')
+        if stoch['cross'] == 'bullish': score += 0.5; factors.append('stoch_bull_cross')
+        elif stoch['cross'] == 'bearish': score -= 0.5; factors.append('stoch_bear_cross')
+        
+        return {
+            'trend_score': round(score, 2),
+            'trend_strength': 'strong' if score >= 3 else 
+                             'moderate' if score >= 1 else 
+                             'weak' if score >= -1 else 'bearish',
+            'confirmed_factors': factors,
+            'suggestion': 'buy' if score >= 2 else 
+                         'sell' if score <= -2 else 
+                         'hold_bullish' if score > 0 else 
+                         'hold_bearish' if score < 0 else 'neutral'
+        }
+
+    @staticmethod
+    def get_support_resistance(close: pd.Series, lookback: int = 100) -> Dict[str, Union[List[float], str]]:
+        """Identifica níveis de suporte e resistência com análise de força"""
+        if len(close) < lookback:
+            return {'error': 'Not enough data'}
+            
+        window = close.iloc[-lookback:]
+        
+        # Identifica pivôs
+        resistance = window[(window.shift(1) < window) & (window.shift(-1) < window)]
+        support = window[(window.shift(1) > window) & (window.shift(-1) > window)]
+        
+        # Filtra os mais significativos
+        significant_r = []
+        significant_s = []
+        
+        for level in resistance.unique():
+            touches = len(window[abs(window - level) < 0.005 * level])
+            if touches >= 2:
+                significant_r.append((level, touches))
+                
+        for level in support.unique():
+            touches = len(window[abs(window - level) < 0.005 * level])
+            if touches >= 2:
+                significant_s.append((level, touches))
+        
+        # Ordena por número de toques
+        significant_r.sort(key=lambda x: x[1], reverse=True)
+        significant_s.sort(key=lambda x: x[1], reverse=True)
+        
+        return {
+            'support': [round(level[0], 5) for level in significant_s[:3]],  # Top 3 supports
+            'resistance': [round(level[0], 5) for level in significant_r[:3]],  # Top 3 resistances
+            'current_position': 'near_support' if abs(close.iloc[-1] - significant_s[0][0]) < 0.01 * close.iloc[-1] else
+                              'near_resistance' if abs(close.iloc[-1] - significant_r[0][0]) < 0.01 * close.iloc[-1] else
+                              'mid_range'
+        }

@@ -1,0 +1,145 @@
+import pandas as pd
+import numpy as np
+import talib
+from typing import Dict, List, Optional, Union
+
+class BollingerBandsPro:
+    """
+    Versão profissional da estratégia Bollinger Bands com:
+    - Filtros de tendência e momentum
+    - Squeeze real (Bollinger vs Keltner)
+    - Uso CORRETO de padrões de velas
+    - Gerenciamento de risco baseado em ATR
+    - Timeframe-aware parameters
+    """
+    
+    def __init__(self, config: Optional[Dict] = None):
+        self.config = config or {}
+        self.timeframe_adjustments = {
+            '1M': {'period': 10, 'std_dev': 1.5, 'ema_trend': 50, 'rsi_period': 7},
+            '5M': {'period': 14, 'std_dev': 1.8, 'ema_trend': 100, 'rsi_period': 10},
+            '15M': {'period': 20, 'std_dev': 2.0, 'ema_trend': 150, 'rsi_period': 12},
+            '1H': {'period': 30, 'std_dev': 2.2, 'ema_trend': 200, 'rsi_period': 14}
+        }
+
+    def calculate_bands(self, close: pd.Series, timeframe: str) -> Dict:
+        """Calcula Bollinger Bands com parâmetros adaptativos"""
+        params = self.timeframe_adjustments.get(timeframe, self.timeframe_adjustments['15M'])
+        middle_band = close.rolling(params['period']).mean()
+        std = close.rolling(params['period']).std()
+        upper = middle_band + (std * params['std_dev'])
+        lower = middle_band - (std * params['std_dev'])
+        return {
+            'upper': upper,
+            'middle': middle_band,
+            'lower': lower,
+            'bandwidth': (upper - lower) / middle_band * 100
+        }
+
+    def calculate_keltner(self, high: pd.Series, low: pd.Series, close: pd.Series, period: int = 20) -> Dict:
+        """Calcula Keltner Channels para detecção real de squeeze"""
+        atr = talib.ATR(high, low, close, timeperiod=period)
+        middle = close.ewm(span=period).mean()
+        return {
+            'upper': middle + (atr * 1.5),
+            'lower': middle - (atr * 1.5)
+        }
+
+    def detect_squeeze(self, bb_upper: pd.Series, bb_lower: pd.Series, 
+                      kelt_upper: pd.Series, kelt_lower: pd.Series) -> bool:
+        """Detecta squeeze REAL (Bollinger dentro de Keltner)"""
+        return (bb_upper.iloc[-1] < kelt_upper.iloc[-1]) and (bb_lower.iloc[-1] > kelt_lower.iloc[-1])
+
+    def generate_signal(self, close: pd.Series, high: pd.Series, low: pd.Series, 
+                       volume: pd.Series, timeframe: str) -> Dict:
+        # 1. Calcula todos os indicadores necessários
+        bands = self.calculate_bands(close, timeframe)
+        keltner = self.calculate_keltner(high, low, close)
+        params = self.timeframe_adjustments.get(timeframe)
+        
+        # Indicadores adicionais
+        rsi = talib.RSI(close, params['rsi_period'])
+        ema_trend = close.ewm(span=params['ema_trend']).mean()
+        adx = talib.ADX(high, low, close, timeperiod=14)
+        
+        # 2. Condições do mercado
+        current = {
+            'price': close.iloc[-1],
+            'trend': 'up' if close.iloc[-1] > ema_trend.iloc[-1] else 'down',
+            'squeeze': self.detect_squeeze(bands['upper'], bands['lower'], keltner['upper'], keltner['lower']),
+            'rsi': rsi.iloc[-1],
+            'adx': adx.iloc[-1],
+            'volume_spike': volume.iloc[-1] > volume.rolling(20).mean().iloc[-1] * 1.5
+        }
+
+        # 3. Regras de entrada (PROFISSIONAIS)
+        signal = None
+        reason = []
+        
+        # Regra 1: Continuidade de tendência (preço respeitando a middle band)
+        if (current['trend'] == 'up' and 
+            close.iloc[-1] > bands['middle'].iloc[-1] and 
+            close.iloc[-2] > bands['middle'].iloc[-2]):
+            signal = 'up'
+            reason.append('uptrend_middle_band_support')
+            
+        elif (current['trend'] == 'down' and 
+              close.iloc[-1] < bands['middle'].iloc[-1] and 
+              close.iloc[-2] < bands['middle'].iloc[-2]):
+            signal = 'down'
+            reason.append('downtrend_middle_band_resistance')
+
+        # Regra 2: Squeeze breakout (com confirmação)
+        if current['squeeze']:
+            if (current['volume_spike'] and current['price'] > bands['upper'].iloc[-1] and current['adx'] > 25):
+                signal = 'up'
+                reason.append('squeeze_breakout_up')
+            elif (current['volume_spike'] and current['price'] < bands['lower'].iloc[-1] and current['adx'] > 25):
+                signal = 'down'
+                reason.append('squeeze_breakout_down')
+
+        # 4. Aplicação SEGURA de padrões de velas (apenas como confirmação)
+        patterns = detect_candlestick_patterns(high, low, close)
+        valid_bullish = any(p in ['hammer', 'bullish_engulfing', 'morning_star'] for p in patterns)
+        valid_bearish = any(p in ['shooting_star', 'bearish_engulfing', 'evening_star'] for p in patterns)
+        
+        if signal == 'up' and not valid_bullish:
+            signal = None  # Invalida sinal sem confirmação de vela
+            reason.append('missing_bullish_pattern')
+        elif signal == 'down' and not valid_bearish:
+            signal = None
+            reason.append('missing_bearish_pattern')
+
+        # 5. Gerenciamento de risco
+        atr = talib.ATR(high, low, close, timeperiod=14).iloc[-1]
+        if signal:
+            stop_loss = (
+                close.iloc[-1] - (atr * 1.5) if signal == 'up' 
+                else close.iloc[-1] + (atr * 1.5)
+            )
+            risk_reward = 1.5  # Fixo (pode ser parametrizado)
+            take_profit = (
+                close.iloc[-1] + (atr * risk_reward) if signal == 'up'
+                else close.iloc[-1] - (atr * risk_reward)
+        else:
+            stop_loss = take_profit = None
+
+        return {
+            'signal': signal,
+            'reason': reason,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'bands': {
+                'upper': round(bands['upper'].iloc[-1], 5),
+                'middle': round(bands['middle'].iloc[-1], 5),
+                'lower': round(bands['lower'].iloc[-1], 5)
+            },
+            'indicators': {
+                'rsi': round(current['rsi'], 2),
+                'adx': round(current['adx'], 2),
+                'ema_trend': round(ema_trend.iloc[-1], 5),
+                'atr': round(atr, 5)
+            },
+            'volume': current['volume_spike'],
+            'patterns': patterns
+        }

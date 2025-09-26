@@ -1,0 +1,410 @@
+##Detecção do mercado automática para recomeça de par e timeframe 
+–Recomendar timeframe curtos quando o sinal é forte
+
+def build_candle_context(df, idx, timeframe='M5'):
+    """
+    Gera contexto institucional completo para análise de padrões de velas.
+    
+    Parâmetros:
+        df: DataFrame com dados OHLCV
+        idx: índice do candle atual
+        timeframe: timeframe sendo analisado (para ajustar parâmetros dinâmicos)
+    
+    Retorna: dict com contexto completo
+    """
+    window_short = df.iloc[max(idx-5, 0):idx+1]  # 5 candles para análise recente
+    window_long = df.iloc[max(idx-20, 0):idx+1]  # 20 candles para contexto médio
+    
+    # Cálculo de volatilidade mais sofisticado (ATR)
+    atr = (window_long['high'] - window_long['low']).mean()
+    volatility = "high" if atr > window_long['close'].mean()*0.002 else "low"
+    
+    # Detecção de sessão (Londres/NY/Asia)
+    hour = df.iloc[idx].name.hour
+    session = "London" if 8 <= hour < 17 else "NY" if 13 <= hour < 22 else "Asia"
+    
+    context = {
+        "avg_volume": window_long["volume"].mean(),
+        "volume_profile": window_short["volume"].mean() / window_long["volume"].mean(),
+        "trend_strength": _calculate_trend_strength(window_long),
+        "price_position": _get_price_position(df, idx),
+        "volatility": volatility,
+        "atr": atr,
+        "session": session,
+        "timeframe": timeframe,
+        "liquidity_zones": _detect_liquidity_zones(window_long),
+        "economic_events": _check_economic_calendar(df.iloc[idx].name),
+        "vwap": (window_long['volume'] * window_long['close']).sum() / window_long['volume'].sum(),
+        "rsi": _calculate_rsi(window_long['close'], 14),
+        "order_flow": _analyze_order_flow(window_short)
+    }
+    return context
+
+def get_dynamic_pattern_strength(patterns, candle, context=None):
+    """
+    Calcula o score dinâmico dos padrões com pesos institucionais avançados.
+    
+    Parâmetros:
+        patterns: lista de padrões detectados
+        candle: dict do candle atual (OHLCV + outros indicadores)
+        context: dict com contexto institucional completo
+    
+    Retorna: tuple (score, confidence) onde:
+        - score: float (0-100) representando força do sinal
+        - confidence: float (0-1) representando confiança no sinal
+    """
+    if context is None:
+        context = {}
+    
+    score = 0
+    confidence = 0.5  # base confidence
+    
+    for p in patterns:
+        base = PATTERN_STRENGTH.get(p, 0.2)
+        pattern_confidence = 1.0
+        
+        # 1. Fatores de Volume e Liquidez
+        volume_factor = 1.0
+        if candle.get("volume") and context.get("avg_volume"):
+            volume_ratio = candle["volume"] / context["avg_volume"]
+            if volume_ratio > 2.0:
+                volume_factor = 1.3
+                pattern_confidence *= 1.1
+            elif volume_ratio > 1.5:
+                volume_factor = 1.2
+            elif volume_ratio < 0.7:
+                volume_factor = 0.8
+                pattern_confidence *= 0.9
+        
+        # 2. Alinhamento com Tendência
+        trend_factor = 1.0
+        if context.get("trend_strength"):
+            strength, direction = context["trend_strength"]
+            if p in REVERSAL_UP and direction == "up":
+                trend_factor = 0.7
+                pattern_confidence *= 0.8
+            elif p in REVERSAL_DOWN and direction == "down":
+                trend_factor = 0.7
+                pattern_confidence *= 0.8
+            elif p in CONTINUATION and direction == "up":
+                trend_factor = 1.2
+                pattern_confidence *= 1.1
+        
+        # 3. Níveis Estruturais
+        level_factor = 1.0
+        if context.get("price_position"):
+            if (p in REVERSAL_UP and context["price_position"] == "strong_support") or \
+               (p in REVERSAL_DOWN and context["price_position"] == "strong_resistance"):
+                level_factor = 1.4
+                pattern_confidence *= 1.3
+        
+        # 4. Volatilidade e Sessão
+        volatility_factor = 1.0
+        if context.get("volatility") == "high" and context.get("session") in ["London", "NY"]:
+            if p in BIG_RANGE_PATTERNS:
+                volatility_factor = 1.25
+        elif context.get("volatility") == "low":
+            volatility_factor = 0.85
+        
+        # 5. Fator de Confirmação
+        confirmation_factor = 1.0
+        if p in NEEDS_CONFIRMATION:
+            if _has_confirmation(candle, context):
+                confirmation_factor = 1.3
+            else:
+                confirmation_factor = 0.6
+        
+        # 6. Raridade do Padrão
+        rarity_factor = 1.0
+        if p in RARE_PATTERNS:
+            rarity_factor = 1.35
+            pattern_confidence *= 1.15
+        
+        # Cálculo final do score para este padrão
+        pattern_score = base * volume_factor * trend_factor * level_factor * volatility_factor * confirmation_factor * rarity_factor
+        score += pattern_score
+        
+        # Atualiza confiança geral (média ponderada)
+        confidence = (confidence + pattern_confidence) / 2
+    
+    # Normaliza o score para 0-100
+    score = min(max(score * 20, 0), 100)
+    
+    return score, confidence
+
+
+
+
+
+# Exemplo de dicionário de padrões com pesos institucionais
+PATTERN_STRENGTH = {
+    # Padrões de reversão
+    "hammer": 1.8,          "hanging_man": 1.8,
+    "engulfing_bull": 2.2,  "engulfing_bear": 2.2,
+    "morning_star": 2.5,    "evening_star": 2.5,
+    
+    # Padrões de continuação
+    "rising_three": 1.5,    "falling_three": 1.5,
+    "mat_hold": 1.7,        "side_by_side": 1.6,
+    
+    # Padrões complexos
+    "three_white_soldiers": 2.8, "three_black_crows": 2.8,
+    "unique_three_river": 2.6,   "breakaway": 2.4
+}
+
+# Classificação de padrões
+REVERSAL_UP = ["hammer", "engulfing_bull", "morning_star", "piercing_line"]
+REVERSAL_DOWN = ["hanging_man", "engulfing_bear", "evening_star", "dark_cloud"]
+CONTINUATION = ["rising_three", "falling_three", "mat_hold", "side_by_side"]
+RARE_PATTERNS = ["three_white_soldiers", "three_black_crows", "unique_three_river"]
+BIG_RANGE_PATTERNS = ["engulfing_bull", "engulfing_bear", "morning_star", "evening_star"]
+NEEDS_CONFIRMATION = ["hammer", "hanging_man", "doji", "spinning_top"]
+
+
+
+
+
+
+
+
+
+
+
+RSI (Relative Strength Index)
+Contexto: sobrecompra (>70) / sobrevenda (<30), divergências.
+
+Padrões ideais:
+
+Reversão em extremos:
+
+hammer, shooting_star, bullish_engulfing, bearish_engulfing, morning_star, evening_star
+
+Complemento:
+
+RSI divergente + doji ou harami confirma fraqueza da tendência.
+
+✅ MACD Crossovers
+Contexto: cruzamento de linha MACD e sinal — início de movimento.
+
+Padrões ideais:
+
+Quando o cruzamento indica reversão:
+
+engulfing, piercing_line, dark_cloud_cover
+
+Em continuidade:
+
+rising_three_methods, falling_three_methods, tasuki gaps
+
+Dica institucional: muitos players usam MACD cross + breakout de candle como trigger.
+
+✅ ATR (Average True Range)
+Contexto: mede volatilidade.
+
+Padrões ideais:
+
+Em ATR alto:
+
+marubozu, belt_hold, three_white_soldiers, black_crows (tendência acelerada)
+
+Em ATR baixo:
+
+doji, spinning_top → sinal de compressão/squeeze.
+
+✅ ADX (Average Directional Index)
+Contexto: mede força de tendência, não direção.
+
+Padrões ideais:
+
+ADX > 25 → tendência forte → padrões de continuação:
+
+rising_three_methods, separating_lines, tasuki gaps
+
+ADX < 20 → lateral → doji, spinning_top, harami_cross
+
+✅ Wick Reversal (Rejeição por pavio)
+Contexto: candles com longos pavios superiores/inferiores sinalizando rejeição.
+
+Padrões ideais:
+
+hammer, shooting_star, inverted_hammer, hanging_man
+
+Funciona muito bem em confluência com:
+
+Níveis de suporte/resistência
+
+VWAP
+
+Bandas (como Bollinger/Donchian)
+
+✅ SMA Cross (Simple Moving Average Cross)
+Contexto: cruzamento de médias lentas (ex: 50 e 200).
+
+Padrões ideais:
+
+Após o cruzamento:
+
+breakaway, belt_hold, morning_star, engulfing
+
+Padrões de confirmação de nova direção após a média ser rompida por candle.
+
+✅ EMA (Exponential Moving Average)
+Contexto: mesma lógica da SMA, mas mais responsiva.
+
+Padrões ideais:
+
+marubozu, doji, engulfing tocando ou rompendo a EMA
+
+EMA 9 ou 21 cruzada com candle forte confirma entrada.
+
+✅ Price Action (ação do preço “pura”)
+Contexto: leitura de estrutura de mercado sem indicadores.
+
+Padrões ideais:
+
+Todos os candlestick clássicos:
+
+engulfing, harami, three_soldiers, three_crows, tweezer, doji, morning_star, evening_star
+
+Contexto de:
+
+Suporte/resistência
+
+LTA/LTB
+
+Retrações de Fibonacci
+
+Ichimoku
+Contexto: confirma tendência e suporte/resistência.
+
+Padrões úteis:
+
+Reversão e continuação: hammer, shooting_star, bullish/bearish_engulfing, morning_star, evening_star.
+
+Estrutura de mercado: aparecerem acima/abaixo da nuvem reforça o sinal 
+ChartSchool
++15
+Mind Math Money
++15
+Dukascopy
++15
+.
+
+Fibonacci
+Contexto: busca retrações em níveis-chave (38, 50, 61.8%).
+
+Padrões úteis:
+
+doji, hammer, shooting_star em nível 61.8% – sinaliza reversão 
+Investopedia
++11
+Babypips.com
++11
+Altfins
++11
+.
+
+Supertrend
+Contexto: tendência clara com banda ATR.
+
+Padrões úteis:
+
+reversal: hammer, harami, engulfing — confirmam a mudança de direção.
+
+Market Profile
+Contexto: zonas de POC/VA como suporte/resistência.
+
+Padrões úteis:
+
+neutral/doji, spinning_top, marubozu ao testar essas zonas, sugerindo indecisão ou continuidade.
+
+Stochastic, CCI, Williams %R (osciladores)
+Contexto: zonas extremas de sobrecompra/sobrevenda.
+
+Padrões úteis:
+
+divergências com RSI, + reversal patterns (engulfing, hammer), reforçam sinais de reversão.
+
+Parabolic SAR
+Contexto: stop & reverse diário.
+
+Padrões úteis:
+
+englobantes ou morning/evening_star após troca do SAR ajudam na confirmação.
+
+Momentum / ROC / DMI (ADX)
+Contexto: força de tendência.
+
+Padrões úteis:
+
+continuation patterns: rising_three_methods, falling_three_methods, tasuki gaps — confirmam continuidade.
+
+VWAP
+Contexto: média de preço ponderada por volume intraday.
+
+Padrões úteis:
+
+belt_hold, marubozu chegando no VWAP—podem validar rompimentos; doji/neutros sinalizam indecisão no nível.
+
+Envelope / Donchian / Keltner
+Contexto: bandas baseadas em preço e volatilidade.
+
+Padrões úteis:
+
+reversão nas extremidades: hammer, shooting_star, engulfing ao tocar banda alta/baixa.
+
+Elliott Wave / ZigZag
+Contexto: mapeamento de ondas fractais.
+
+Padrões úteis:
+
+doji e reversal patterns nos pivôs de onda.
+
+triangulações: hikkake pattern 
+Wikipédia
+.
+
+Heikin Ashi
+Contexto: suavização de tendência.
+
+Padrões úteis:
+
+doji HA como sinal de indecisão ou esgotamento; confirmações com engulfing/adaptados após suavizar ruído.
+
+Accumulation/Distribution & Chaikin Money Flow
+Contexto: fluxo de dinheiro.
+
+Padrões úteis:
+
+divergência preço–volume: marubozu, doji, spinning_top confirmando fluxo divergente.
+
+✅ Resumo de recomendações
+Indicador	Padrões Recomendados
+Ichimoku	hammer, shooting_star, engulfing, star patterns 
+tradeciety.com
++15
+Wikipédia
++15
+Babypips.com
++15
+Dukascopy
+
+Fibonacci	doji, hammer, shooting_star em 38/61.8 %
+
+Supertrend	hammer, harami, engulfing
+
+Market Profile / Bands	doji, marubozu, spinning_top nos extremos
+
+Osciladores (Stoch/CCI/W%)	divergence + reversal patterns
+Parabolic SAR	reversal patterns pós troca de posição
+
+Momentum / DMI	continuation patterns (three_methods, gaps)
+VWAP	belt_hold, marubozu, doji em VWAP
+
+Envelope / Donchian / Keltner	hammer, engulfing, shooting_star nas bandas
+
+Elliott / ZigZag	doji, reversal patterns em pivôs, hikkake
+
+Heikin Ashi	HA doji + confirmações com engulfing
+
+A/D & CMF	divergence com marubozu, spinning_top

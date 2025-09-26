@@ -1,0 +1,16 @@
+{
+  "name": "dukas-telegram-bot",
+  "version": "1.0.1",
+  "description": "Real-time Forex signal bot using Dukascopy data",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dayjs": "1.11.10",
+    "dukascopy-node": "1.34.0"
+  },
+  "engines": {
+    "node": "20"
+  }
+}

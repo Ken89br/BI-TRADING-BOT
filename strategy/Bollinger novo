@@ -1,0 +1,233 @@
+import pandas as pd
+import numpy as np
+from typing import Dict, List, Union, Tuple
+from strategy.config_strategy import CONFIG
+from strategy.candlestick_patterns import PATTERN_STRENGTH, detect_candlestick_patterns
+
+def get_indicator_period(indicator: str, timeframe: str) -> int:
+    mapping = {
+        "S1": {"bollinger": 10},
+        "M1": {"bollinger": 10},
+        "M5": {"bollinger": 14},
+        "M15": {"bollinger": 20},
+        "M30": {"bollinger": 25},
+        "H1": {"bollinger": 30},
+        "H4": {"bollinger": 50},
+        "D1": {"bollinger": 100},
+    }
+    return mapping.get(timeframe, {}).get(indicator, 20)
+
+class BollingerBandsStrategy:
+    @staticmethod
+    def calculate_bollinger_bands(close: pd.Series,
+                                period: int = 20,
+                                std_dev: float = 2.0,
+                                ma_type: str = 'sma') -> Dict[str, pd.Series]:
+        if ma_type == 'sma':
+            middle_band = close.rolling(window=period).mean()
+        elif ma_type == 'ema':
+            middle_band = close.ewm(span=period, adjust=False).mean()
+        else:
+            middle_band = close.rolling(window=period).mean()
+        std = close.rolling(window=period).std()
+        upper_band = middle_band + (std * std_dev)
+        lower_band = middle_band - (std * std_dev)
+        bandwidth = (upper_band - lower_band) / middle_band * 100
+        return {
+            'upper_band': upper_band,
+            'middle_band': middle_band,
+            'lower_band': lower_band,
+            'bandwidth': bandwidth,
+            'std_dev': std
+        }
+
+    @staticmethod
+    def identify_conditions(close: pd.Series,
+                          upper_band: pd.Series,
+                          middle_band: pd.Series,
+                          lower_band: pd.Series,
+                          bandwidth: pd.Series) -> Dict[str, Union[bool, float]]:
+        current_price = close.iloc[-1]
+        current_upper = upper_band.iloc[-1]
+        current_lower = lower_band.iloc[-1]
+        current_middle = middle_band.iloc[-1]
+        above_upper = current_price >= current_upper
+        below_lower = current_price <= current_lower
+        near_middle = abs(current_price - current_middle) < (current_upper - current_middle) * 0.3
+        bandwidth_pct = bandwidth.rank(pct=True).iloc[-1] * 100
+        squeeze = bandwidth_pct < 20
+        return {
+            'above_upper': above_upper,
+            'below_lower': below_lower,
+            'near_middle': near_middle,
+            'squeeze': squeeze,
+            'bandwidth_pct': bandwidth_pct,
+            'distance_to_middle': ((current_price - current_middle) / current_middle) * 100
+        }
+
+    @staticmethod
+    def generate_signals(close: pd.Series,
+                       upper_band: pd.Series,
+                       middle_band: pd.Series,
+                       lower_band: pd.Series,
+                       conditions: Dict,
+                       volume: pd.Series = None,
+                       rsi: pd.Series = None) -> Dict[str, Union[str, float]]:
+        current_price = close.iloc[-1]
+        previous_price = close.iloc[-2]
+        current_middle = middle_band.iloc[-1]
+        signal = None
+        if conditions['above_upper']:
+            if rsi is not None and rsi.iloc[-1] > 70:
+                signal = 'down'
+        elif conditions['below_lower']:
+            if rsi is not None and rsi.iloc[-1] < 30:
+                signal = 'up'
+        if conditions['squeeze'] and not signal:
+            if current_price > previous_price and volume.iloc[-1] > volume.rolling(20).mean().iloc[-1] * 1.2:
+                signal = 'up'
+            elif current_price < previous_price and volume.iloc[-1] > volume.rolling(20).mean().iloc[-1] * 1.2:
+                signal = 'down'
+        strength = 'weak'
+        if signal:
+            if volume is not None and volume.iloc[-1] > volume.rolling(20).mean().iloc[-1] * 1.5:
+                strength = 'strong_volume'
+            elif conditions['squeeze']:
+                strength = 'strong_squeeze'
+            elif (signal == 'up' and rsi is not None and rsi.iloc[-1] < 25) or (signal == 'down' and rsi is not None and rsi.iloc[-1] > 75):
+                strength = 'strong_rsi'
+        return {
+            'signal': signal,
+            'strength': strength,
+            'current_price': current_price,
+            'middle_band': current_middle,
+            'bandwidth_pct': conditions['bandwidth_pct']
+        }
+
+    @staticmethod
+    def risk_management(close: pd.Series,
+                      middle_band: pd.Series,
+                      signal: str) -> Dict[str, float]:
+        current_price = close.iloc[-1]
+        current_middle = middle_band.iloc[-1]
+        if signal == 'up':
+            stop_loss = min(current_middle, close.iloc[-3:].min())
+            take_profit = current_price + (current_price - stop_loss) * 1.5
+        elif signal == 'down':
+            stop_loss = max(current_middle, close.iloc[-3:].max())
+            take_profit = current_price - (stop_loss - current_price) * 1.5
+        else:
+            stop_loss = take_profit = None
+        return {
+            'stop_loss': round(stop_loss, 2) if stop_loss else None,
+            'take_profit': round(take_profit, 2) if take_profit else None,
+            'risk_reward_ratio': 1.5
+        }
+
+    @staticmethod
+    def _apply_pattern_boost(signal, patterns, direction, pattern_boost=0.2, min_confidence=70):
+        if not patterns or not direction:
+            signal["confidence"] = min_confidence
+            signal["pattern_strength"] = 0
+            return signal
+        if direction == "up":
+            relevant_patterns = CONFIG["candlestick_patterns"]["reversal_up"] + CONFIG["candlestick_patterns"]["trend_up"]
+        elif direction == "down":
+            relevant_patterns = CONFIG["candlestick_patterns"]["reversal_down"] + CONFIG["candlestick_patterns"]["trend_down"]
+        else:
+            relevant_patterns = []
+        pattern_strength = sum(
+            PATTERN_STRENGTH.get(p, 0.1) for p in patterns if p in relevant_patterns
+        )
+        confidence = min(95, min_confidence + int(pattern_strength * 20 * pattern_boost))
+        signal["confidence"] = confidence
+        signal["patterns"] = patterns
+        signal["pattern_strength"] = pattern_strength
+        return signal
+
+    @staticmethod
+    def full_analysis(close: pd.Series,
+                    high: pd.Series = None,
+                    low: pd.Series = None,
+                    volume: pd.Series = None,
+                    rsi: pd.Series = None,
+                    timeframe: str = "M15",
+                    ma_type: str = 'sma',
+                    patterns: List[str] = None) -> Dict[str, Union[Dict, str]]:
+        period = get_indicator_period("bollinger", timeframe)
+        std_dev = CONFIG.get("bbands", {}).get("std_dev", 2.0)
+        bands = BollingerBandsStrategy.calculate_bollinger_bands(close, period, std_dev, ma_type)
+        conditions = BollingerBandsStrategy.identify_conditions(close, bands['upper_band'], bands['middle_band'], bands['lower_band'], bands['bandwidth'])
+        signals = BollingerBandsStrategy.generate_signals(close, bands['upper_band'], bands['middle_band'], bands['lower_band'], conditions, volume, rsi)
+        risk_mgmt = BollingerBandsStrategy.risk_management(close, bands['middle_band'], signals['signal'])
+        pattern_boost = CONFIG.get("bbands", {}).get("pattern_boost", 0.2)
+        min_confidence = CONFIG.get("bbands", {}).get("min_confidence", 70)
+        # Detecta padrões de vela se não vier do pipeline
+        if patterns is None:
+            patterns = []
+            if high is not None and low is not None:
+                try:
+                    # Usando os últimos 5 candles para reversão, 15 para contexto/tendência
+                    candles_small = []
+                    candles_medium = []
+                    df_len = len(close)
+                    for i in range(max(df_len-5,0), df_len):
+                        candles_small.append({
+                            "open": close.iloc[i-1] if i > 0 else close.iloc[i],
+                            "high": high.iloc[i],
+                            "low": low.iloc[i],
+                            "close": close.iloc[i]
+                        })
+                    for i in range(max(df_len-15,0), df_len):
+                        candles_medium.append({
+                            "open": close.iloc[i-1] if i > 0 else close.iloc[i],
+                            "high": high.iloc[i],
+                            "low": low.iloc[i],
+                            "close": close.iloc[i]
+                        })
+                    patterns_small = detect_candlestick_patterns(candles_small)
+                    patterns_medium = detect_candlestick_patterns(candles_medium)
+                    patterns = list(set(patterns_small + patterns_medium))
+                except Exception:
+                    patterns = []
+        direction = signals['signal'] if signals['signal'] else None
+        signals = BollingerBandsStrategy._apply_pattern_boost(signals, patterns, direction, pattern_boost, min_confidence)
+        return {
+            'bands': {
+                'upper': round(bands['upper_band'].iloc[-1], 5),
+                'middle': round(bands['middle_band'].iloc[-1], 5),
+                'lower': round(bands['lower_band'].iloc[-1], 5),
+                'bandwidth': round(bands['bandwidth'].iloc[-1], 2),
+                'std_dev': round(bands['std_dev'].iloc[-1], 5)
+            },
+            'conditions': conditions,
+            'signals': signals,
+            'risk_management': risk_mgmt,
+            'period': period,
+            'std_dev': std_dev
+        }
+
+    @staticmethod
+    def optimize_parameters(close: pd.Series,
+                          min_period: int = 10,
+                          max_period: int = 50,
+                          min_std: float = 1.5,
+                          max_std: float = 3.0) -> Dict[str, float]:
+        def objective(params):
+            period, std = params
+            period = int(round(period))
+            bands = BollingerBandsStrategy.calculate_bollinger_bands(close, period, std)
+            touches = 0
+            for i in range(1, len(close)):
+                if (close.iloc[i] >= bands['upper_band'].iloc[i] and close.iloc[i-1] < bands['upper_band'].iloc[i-1]) or \
+                   (close.iloc[i] <= bands['lower_band'].iloc[i] and close.iloc[i-1] > bands['lower_band'].iloc[i-1]):
+                    touches += 1
+            penalty = abs(period - 20) * 0.1 + abs(std - 2.0) * 0.5
+            return -(touches - penalty)
+        from scipy.optimize import differential_evolution
+        bounds = [(min_period, max_period), (min_std, max_std)]
+        result = differential_evolution(objective, bounds)
+        return {
+            'optimal_period': int(round(result.x[0])),
+            'optimal_std_dev': round(result.x[1], 2)
+        }
