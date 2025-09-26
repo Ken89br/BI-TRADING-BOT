@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from data.data_client import FallbackDataClient
@@ -17,8 +17,8 @@ class TopDownDataManager:
                 'main_tf': '1W', 
                 'confirmation_tf': '1D', 
                 'entry_tf': '6H',
-                'timeframes': ['1W', '1D', '6H'],
-                'limits': {'1W': 52, '1D': 30, '6H': 40}
+                'timeframes': ['1W', '1D', '6H'],  # Todos necessários
+                'limits': {'1W': 52, '1D': 30, '6H': 40}  # 1 ano, 1 mês, 10 dias
             }
         ],
         
@@ -28,24 +28,24 @@ class TopDownDataManager:
                 'confirmation_tf': '4H', 
                 'entry_tf': '1H',
                 'timeframes': ['1D', '4H', '1H'],
-                'limits': {'1D': 30, '4H': 42, '1H': 24}
+                'limits': {'1D': 30, '4H': 42, '1H': 24}  # 1 mês, 1 semana, 1 dia
             }
         ],
         
         'day_trading': [
             {
                 'main_tf': '6H', 
-                'confirmation_tf': '1H', 
-                'entry_tf': '15min',
-                'timeframes': ['6H', '1H', '15min'],
-                'limits': {'6H': 20, '1H': 24, '15min': 96}
+                'confirmation_tf': '2H', 
+                'entry_tf': '30min',
+                'timeframes': ['6H', '2H', '30min'],
+                'limits': {'6H': 20, '2H': 30, '30min': 48}  # 5 dias, 2.5 dias, 1 dia
             },
             {
                 'main_tf': '4H', 
                 'confirmation_tf': '1H', 
                 'entry_tf': '15min',
                 'timeframes': ['4H', '1H', '15min'],
-                'limits': {'4H': 30, '1H': 24, '15min': 96}
+                'limits': {'4H': 30, '1H': 24, '15min': 96}  # 5 dias, 1 dia, 1 dia
             }
         ],
         
@@ -55,14 +55,14 @@ class TopDownDataManager:
                 'confirmation_tf': '30min', 
                 'entry_tf': '5min',
                 'timeframes': ['1H', '30min', '5min'],
-                'limits': {'1H': 24, '30min': 48, '5min': 144}
+                'limits': {'1H': 24, '30min': 48, '5min': 144}  # 1 dia, 1 dia, 12 horas
             },
             {
                 'main_tf': '30min', 
                 'confirmation_tf': '15min', 
                 'entry_tf': '3min',
                 'timeframes': ['30min', '15min', '3min'],
-                'limits': {'30min': 48, '15min': 96, '3min': 160}
+                'limits': {'30min': 48, '15min': 96, '3min': 160}  # 1 dia, 1 dia, 8 horas
             }
         ],
         
@@ -72,14 +72,14 @@ class TopDownDataManager:
                 'confirmation_tf': '5min', 
                 'entry_tf': '1min',
                 'timeframes': ['15min', '5min', '1min'],
-                'limits': {'15min': 96, '5min': 144, '1min': 240}
+                'limits': {'15min': 96, '5min': 144, '1min': 240}  # 1 dia, 12 horas, 4 horas
             },
             {
                 'main_tf': '5min', 
                 'confirmation_tf': '3min', 
                 'entry_tf': '1min',
                 'timeframes': ['5min', '3min', '1min'],
-                'limits': {'5min': 144, '3min': 240, '1min': 360}
+                'limits': {'5min': 144, '3min': 240, '1min': 360}  # 12 horas, 12 horas, 6 horas
             }
         ]
     }
@@ -101,11 +101,11 @@ class TopDownDataManager:
         self.processor = MarketAwareDataProcessor()
         self._cache = {}
         self._cache_ttl = {
-            'position_trading': 3600,
-            'swing_trading': 1800,
-            'day_trading': 600,
-            'scalping': 300,
-            'ultra_scalping': 60
+            'position_trading': 3600,    # 1 hora
+            'swing_trading': 1800,       # 30 minutos
+            'day_trading': 600,          # 10 minutos
+            'scalping': 300,             # 5 minutos
+            'ultra_scalping': 60         # 1 minuto
         }
 
     def get_top_down_data(self, symbol: str, main_tf: str) -> Dict[str, pd.DataFrame]:
