@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: TradingBot
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: |
+      apt-get update && apt-get install -y curl
+      curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      apt-get install -y nodejs
+      pip install -r requirements.txt
+      npm install --prefix scripts dukascopy-node --save
+      npm install --prefix data dukascopy-node --save
+    startCommand: |
+       python -m strategy.autotrainer & python server.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        value: "7651666306:AAHPdLdPclIxIsriSmswT6N7x5REwvuQBdw"
+      - key: TELEGRAM_CHAT_ID
+        value: "8137693719"
+      - key: TELEGRAM_ADMIN_ID
+        value: "8137693719"
+      - key: POLYGON_API_KEY
+        value: "WM3qHfs_R2VILyPyuXnUp2ZRrfcV6i5g"
+      - key: WEBHOOK_URL
+        value: "https://tradingbot-immv.onrender.com"
+      - key: GITHUB_TOKEN
+        value: "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"
+      - key: PORT
+        value: "10000"
+      - key: TWELVEDATA_API_KEY
+        value: "2e08f48192c14bee8d4ecefc763a2a37"
+      - key: TIINGO_API_KEY
+        value: "4672b0ac473424934228d0ad0ad1e8500a78f190"
+      - key: GOOGLE_CREDENTIALS_JSON
+        value: {"installed":{"client_id":"1080748056591-uk4s51sqnt6ti29ns1k93j3bqo004bld.apps.googleusercontent.com","project_id":"stalwart-glider-462917-u1","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_secret":"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","redirect_uris":["http://localhost"]}}
+      - key: POCKETOPTION_SSID
+        value: cf40d40056ae75f6ec1894b1e17015ab
