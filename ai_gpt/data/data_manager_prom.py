@@ -177,7 +177,7 @@ class TopDownDataManager:
             
             # Validar e cachear resultados
             valid_timeframes = [tf for tf, df in results.items() if not df.empty]
-            if len(valid_timeframes) >= 2:  # 2 candles pra análise 
+            if len(valid_timeframes) >= 2:  # Mínimo 2 timeframes para análise 
                 self._cache[cache_key] = results
                 self._cache[f"{cache_key}_timestamp"] = datetime.now()
                 print(f"✅ Top-Down carregado: {symbol} {config['main_tf']} → {valid_timeframes}")
