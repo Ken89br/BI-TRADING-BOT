@@ -540,14 +540,6 @@ def treinar_modelo_com_dados_historicos():
     
     for symbol in SYMBOLS[:3]:  # Limitar para teste
 
-
-uu
-
-
-
-
-SYMBOLS[:3]:  # Limitar para teste
-
         for timeframe in ['15min', '1H']:
             result = data_client.fetch_candles(symbol, interval=timeframe, limit=500)
             if result and "history" in result:
@@ -567,13 +559,10 @@ SYMBOLS[:3]:  # Limitar para teste
         print("✅ Treino concluído")
 
     else:
-
         print("❌ Dados insuficientes para treino")
 
 def main_loop():
-
-    """Loop principal sem GPT"""
-
+    
     print("🚀 Iniciando analisador XGBoost...")    
 
     # Treinar modelo inicial se necessário
@@ -582,20 +571,16 @@ def main_loop():
         treinar_modelo_com_dados_historicos()
 
     while True:
-
+        
         try:
-
             # Selecionar par e timeframe aleatórios
-
             symbol = random.choice(SYMBOLS + OTC_SYMBOLS)
-
             timeframe = random.choice(TIMEFRAMES)  
 
             # Fazer análise
             resultado = analisar_par(symbol, timeframe)            
 
             if resultado:
-
                 # Salvar resultado
                 df_result = pd.DataFrame([resultado])
                 os.makedirs("output", exist_ok=True)
