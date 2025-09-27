@@ -1110,6 +1110,7 @@ class AdvancedSRAnalyzer:
             try:
                 vol_ma_20 = df['Volume'].rolling(20, min_periods=1).mean().fillna(1)
                 base_vol = vol_ma_20.iloc[index] if index < len(df) else 1.0
+
                 if base_vol > 0:
                     volume_ratio = min(df['Volume'].iloc[index] / base_vol, 3.0)
                 else:
@@ -1117,7 +1118,9 @@ class AdvancedSRAnalyzer:
             except Exception:
                 volume_ratio = 1.0
 
-            volume_score = (volume_ratio - 1) * weight_config['volume']
+            # Garante que não fique negativo
+            raw_volume_score = (volume_ratio - 1) * weight_config['volume']
+            volume_score = max(0.0, raw_volume_score)
 
             # ================================
             # 2. Tendência (se disponível)
