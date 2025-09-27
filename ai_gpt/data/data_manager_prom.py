@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from data.data_client import FallbackDataClient
@@ -17,8 +17,8 @@ class TopDownDataManager:
                 'main_tf': '1W', 
                 'confirmation_tf': '1D', 
                 'entry_tf': '6H',
-                'timeframes': ['1W', '1D', '6H'],  # Todos necessários
-                'limits': {'1W': 52, '1D': 30, '6H': 40}  # 1 ano, 1 mês, 10 dias
+                'timeframes': ['1W', '1D', '6H'],
+                'limits': {'1W': 52, '1D': 30, '6H': 40}
             }
         ],
         
@@ -148,7 +148,9 @@ class TopDownDataManager:
         if self._is_cache_valid(cache_key, strategy_type):
             return self._cache[cache_key]
         
-        print(f"🎯 Buscando Top-Down: {symbol} | "
+        # Descrição da estratégia no log
+        strategy_desc = self._get_strategy_description(strategy_type)
+        print(f"🎯 {strategy_desc} | {symbol} | "
               f"Main: {config['main_tf']} | Confirmation: {config['confirmation_tf']} | "
               f"Entry: {config['entry_tf']}")
         
@@ -177,7 +179,7 @@ class TopDownDataManager:
             
             # Validar e cachear resultados
             valid_timeframes = [tf for tf, df in results.items() if not df.empty]
-            if len(valid_timeframes) >= 2:  # Mínimo 2 timeframes para análise 
+            if len(valid_timeframes) >= 2:  # Mínimo 2 timeframes para análise
                 self._cache[cache_key] = results
                 self._cache[f"{cache_key}_timestamp"] = datetime.now()
                 print(f"✅ Top-Down carregado: {symbol} {config['main_tf']} → {valid_timeframes}")
@@ -217,7 +219,7 @@ class TopDownDataManager:
         return list(self.TIMEFRAME_TO_STRATEGY.keys())
 
     def get_strategy_info(self, main_tf: str) -> Dict:
-        """Retorna informações da estratégia (para UI)"""
+        """Retorna informações completas da estratégia"""
         if main_tf not in self.TIMEFRAME_TO_STRATEGY:
             return {}
         
@@ -229,11 +231,24 @@ class TopDownDataManager:
         
         return {
             'strategy_type': strategy_type,
+            'strategy_description': self._get_strategy_description(strategy_type),  # ✅ ADICIONADO
             'main_tf': config['main_tf'],
             'confirmation_tf': config['confirmation_tf'],
             'entry_tf': config['entry_tf'],
-            'timeframes': config['timeframes']
+            'timeframes': config['timeframes'],
+            'limits': config['limits']
         }
+
+    def _get_strategy_description(self, strategy_type: str) -> str:
+        """Descrição amigável das estratégias"""
+        descriptions = {
+            'position_trading': 'Long-term trends (weeks to months)',
+            'swing_trading': 'Medium-term swings (days to weeks)', 
+            'day_trading': 'Intraday opportunities (hours to days)',
+            'scalping': 'Short-term precision (minutes to hours)',
+            'ultra_scalping': 'High-frequency opportunities (seconds to minutes)'
+        }
+        return descriptions.get(strategy_type, 'Unknown strategy')
 
     def _is_cache_valid(self, cache_key: str, strategy_type: str) -> bool:
         """Verifica se o cache é válido"""
