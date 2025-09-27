@@ -216,13 +216,6 @@ ml_model.carregar_modelo()
 data_client = FallbackDataClient()
 sr_analyzer = AdvancedSRAnalyzer(data_client)
 
-# === Fallback de chaves OpenAI ===
-def set_next_openai_key():
-    current = OPENAI_KEYS.index(openai.api_key)
-    next_index = (current + 1) % len(OPENAI_KEYS)
-    openai.api_key = OPENAI_KEYS[next_index]
-    print(f"🔄 Alternando para próxima OpenAI key: {next_index + 1}/{len(OPENAI_KEYS)}")
-
 def calcular_medias_moveis(df: pd.DataFrame) -> Dict[str, float]:
     """Calcula apenas as MMs mais relevantes"""
     return {
@@ -556,27 +549,19 @@ uu
 SYMBOLS[:3]:  # Limitar para teste
 
         for timeframe in ['15min', '1H']:
-
             result = data_client.fetch_candles(symbol, interval=timeframe, limit=500)
-
             if result and "history" in result:
 
                 df = pd.DataFrame(result["history"])
 
                 if not df.empty:
-
                     df["symbol"] = symbol
-
                     df["timeframe"] = timeframe
-
                     dados_treino.append(df)
-
-    
 
     if dados_treino:
 
         df_completo = pd.concat(dados_treino, ignore_index=True)
-
         ml_model.treinar_modelo(df_completo)
 
         print("✅ Treino concluído")
@@ -585,25 +570,16 @@ SYMBOLS[:3]:  # Limitar para teste
 
         print("❌ Dados insuficientes para treino")
 
-
-
-# ✅ Loop principal simplificado
-
 def main_loop():
 
     """Loop principal sem GPT"""
 
-    print("🚀 Iniciando analisador XGBoost...")
-
-    
+    print("🚀 Iniciando analisador XGBoost...")    
 
     # Treinar modelo inicial se necessário
-
     if not os.path.exists(ml_model.model_path):
 
         treinar_modelo_com_dados_historicos()
-
-    
 
     while True:
 
@@ -613,50 +589,32 @@ def main_loop():
 
             symbol = random.choice(SYMBOLS + OTC_SYMBOLS)
 
-            timeframe = random.choice(TIMEFRAMES)
-
-            
+            timeframe = random.choice(TIMEFRAMES)  
 
             # Fazer análise
-
-            resultado = analisar_par(symbol, timeframe)
-
-            
+            resultado = analisar_par(symbol, timeframe)            
 
             if resultado:
 
                 # Salvar resultado
-
                 df_result = pd.DataFrame([resultado])
-
                 os.makedirs("output", exist_ok=True)
-
                 df_result.to_csv(
-
                     f"output/sinais_ml_{datetime.utcnow().date()}.csv",
-
                     mode='a', index=False, header=not os.path.exists(f"output/sinais_ml_{datetime.utcnow().date()}.csv")
 
                 )
-
-                
-
+       
                 print(f"💾 Resultado salvo: {resultado['decisao_final']}")
-
             
-
             # Esperar antes da próxima análise
-
             import time
-
             time.sleep(60)  # Analisar a cada 1 minuto
-
             
-
         except Exception as e:
-
             print(f"❌ Erro no loop principal: {e}")
-
             import time
-
             time.sleep(30)
+
+if __name__ == "__main__":
+    main_loop()
