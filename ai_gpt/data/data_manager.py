@@ -11,7 +11,7 @@ class TopDownDataManager:
     """
     
     # CONFIGURAÇÃO TOP-DOWN HIERÁRQUICA
-    TOP_DOWN_STRATEGIES = {
+    TRADING_STYLE= {
         'position_trading': [
             {
                 'trend_tf': '1W', 
