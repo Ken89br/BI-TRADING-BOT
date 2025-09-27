@@ -14,7 +14,7 @@ class TopDownDataManager:
     TOP_DOWN_STRATEGIES = {
         'position_trading': [
             {
-                'main_tf': '1W', 
+                'trend_tf': '1W', 
                 'confirmation_tf': '1D', 
                 'entry_tf': '6H',
                 'timeframes': ['1W', '1D', '6H'],
@@ -24,7 +24,7 @@ class TopDownDataManager:
         
         'swing_trading': [
             {
-                'main_tf': '1D', 
+                'trend_tf': '1D', 
                 'confirmation_tf': '4H', 
                 'entry_tf': '1H',
                 'timeframes': ['1D', '4H', '1H'],
@@ -34,14 +34,14 @@ class TopDownDataManager:
         
         'day_trading': [
             {
-                'main_tf': '6H', 
+                'trend_tf': '6H', 
                 'confirmation_tf': '2H', 
                 'entry_tf': '30min',
                 'timeframes': ['6H', '2H', '30min'],
                 'limits': {'6H': 20, '2H': 30, '30min': 48}  # 5 dias, 2.5 dias, 1 dia
             },
             {
-                'main_tf': '4H', 
+                'trend_tf': '4H', 
                 'confirmation_tf': '1H', 
                 'entry_tf': '15min',
                 'timeframes': ['4H', '1H', '15min'],
@@ -51,14 +51,14 @@ class TopDownDataManager:
         
         'scalping': [
             {
-                'main_tf': '1H', 
+                'trend_tf': '1H', 
                 'confirmation_tf': '30min', 
                 'entry_tf': '5min',
                 'timeframes': ['1H', '30min', '5min'],
                 'limits': {'1H': 24, '30min': 48, '5min': 144}  # 1 dia, 1 dia, 12 horas
             },
             {
-                'main_tf': '30min', 
+                'trend_tf': '30min', 
                 'confirmation_tf': '15min', 
                 'entry_tf': '3min',
                 'timeframes': ['30min', '15min', '3min'],
@@ -68,14 +68,14 @@ class TopDownDataManager:
         
         'ultra_scalping': [
             {
-                'main_tf': '15min', 
+                'trend_tf': '15min', 
                 'confirmation_tf': '5min', 
                 'entry_tf': '1min',
                 'timeframes': ['15min', '5min', '1min'],
                 'limits': {'15min': 96, '5min': 144, '1min': 240}  # 1 dia, 12 horas, 4 horas
             },
             {
-                'main_tf': '5min', 
+                'trend_tf': '5min', 
                 'confirmation_tf': '3min', 
                 'entry_tf': '1min',
                 'timeframes': ['5min', '3min', '1min'],
@@ -108,41 +108,37 @@ class TopDownDataManager:
             'ultra_scalping': 60         # 1 minuto
         }
 
-    def get_top_down_data(self, symbol: str, main_tf: str) -> Dict[str, pd.DataFrame]:
+    def get_top_down_data(self, symbol: str, trend_tf: str) -> Dict[str, pd.DataFrame]:
         """
         Obtém dados hierárquicos para análise Top-Down
         
         Args:
             symbol: Par a ser analisado (ex: 'EURUSD')
-            main_tf: Timeframe principal (ex: '1H', '4H', '15min')
+            trend_tf: Timeframe principal (ex: '1H', '4H', '15min')
         
         Returns:
-            Dict com 3 timeframes: {main_tf: DataFrame, confirmation_tf: DataFrame, entry_tf: DataFrame}
+            Dict com 3 timeframes: {trend_tf: DataFrame, confirmation_tf: DataFrame, entry_tf: DataFrame}
         """
-        # Validar timeframe principal
-        if main_tf not in self.TIMEFRAME_TO_STRATEGY:
-            raise ValueError(f"Timeframe principal inválido: {main_tf}. "
+        if trend_tf not in self.TIMEFRAME_TO_STRATEGY:
+            raise ValueError(f"Timeframe principal inválido: {trend_tf}. "
                            f"Use: {list(self.TIMEFRAME_TO_STRATEGY.keys())}")
         
-        # Detectar estratégia e configuração
-        strategy_type = self.TIMEFRAME_TO_STRATEGY[main_tf]
-        config = self._find_config(strategy_type, main_tf)
+        strategy_type = self.TIMEFRAME_TO_STRATEGY[trend_tf]
+        config = self._find_config(strategy_type, trend_tf)
         
         if not config:
-            raise ValueError(f"Configuração não encontrada para {main_tf}")
+            raise ValueError(f"Configuração não encontrada para {trend_tf}")
         
         return self._fetch_hierarchical_data(symbol, config, strategy_type)
 
-    def _find_config(self, strategy_type: str, main_tf: str) -> Optional[Dict]:
-        """Encontra a configuração para a estratégia e timeframe"""
+    def _find_config(self, strategy_type: str, trend_tf: str) -> Optional[Dict]:
         for config in self.TOP_DOWN_STRATEGIES.get(strategy_type, []):
-            if config['main_tf'] == main_tf:
+            if config['trend_tf'] == trend_tf:
                 return config
         return None
 
     def _fetch_hierarchical_data(self, symbol: str, config: Dict, strategy_type: str) -> Dict[str, pd.DataFrame]:
-        """Busca dados dos 3 timeframes em paralelo"""
-        cache_key = f"topdown_{symbol}_{config['main_tf']}"
+        cache_key = f"topdown_{symbol}_{config['trend_tf']}"
         
         # Verificar cache
         if self._is_cache_valid(cache_key, strategy_type):
@@ -151,13 +147,12 @@ class TopDownDataManager:
         # Descrição da estratégia no log
         strategy_desc = self._get_strategy_description(strategy_type)
         print(f"🎯 {strategy_desc} | {symbol} | "
-              f"Main: {config['main_tf']} | Confirmation: {config['confirmation_tf']} | "
+              f"Trend: {config['trend_tf']} | Confirmation: {config['confirmation_tf']} | "
               f"Entry: {config['entry_tf']}")
         
         results = {}
         
         try:
-            # Buscar os 3 timeframes em paralelo
             with ThreadPoolExecutor(max_workers=3) as executor:
                 futures = {}
                 
@@ -182,7 +177,7 @@ class TopDownDataManager:
             if len(valid_timeframes) >= 2:  # Mínimo 2 timeframes para análise
                 self._cache[cache_key] = results
                 self._cache[f"{cache_key}_timestamp"] = datetime.now()
-                print(f"✅ Top-Down carregado: {symbol} {config['main_tf']} → {valid_timeframes}")
+                print(f"✅ Top-Down carregado: {symbol} {config['trend_tf']} → {valid_timeframes}")
             else:
                 print(f"⚠️ Dados insuficientes para {symbol}")
             
@@ -194,10 +189,8 @@ class TopDownDataManager:
 
     def _fetch_single_timeframe(self, symbol: str, timeframe: str, limit: int, 
                                strategy_type: str) -> Optional[pd.DataFrame]:
-        """Busca dados de um único timeframe"""
         cache_key = f"{symbol}_{timeframe}_{limit}"
         
-        # Verificar cache
         if cache_key in self._cache and self._is_cache_valid(cache_key, strategy_type):
             return self._cache[cache_key]
         
@@ -214,25 +207,23 @@ class TopDownDataManager:
             print(f"❌ Erro em {symbol} {timeframe}: {e}")
             return None
 
-    def get_available_main_timeframes(self) -> List[str]:
-        """Retorna timeframes principais disponíveis (para UI)"""
+    def get_available_trend_timeframes(self) -> List[str]:
         return list(self.TIMEFRAME_TO_STRATEGY.keys())
 
-    def get_strategy_info(self, main_tf: str) -> Dict:
-        """Retorna informações completas da estratégia"""
-        if main_tf not in self.TIMEFRAME_TO_STRATEGY:
+    def get_strategy_info(self, trend_tf: str) -> Dict:
+        if trend_tf not in self.TIMEFRAME_TO_STRATEGY:
             return {}
         
-        strategy_type = self.TIMEFRAME_TO_STRATEGY[main_tf]
-        config = self._find_config(strategy_type, main_tf)
+        strategy_type = self.TIMEFRAME_TO_STRATEGY[trend_tf]
+        config = self._find_config(strategy_type, trend_tf)
         
         if not config:
             return {}
         
         return {
             'strategy_type': strategy_type,
-            'strategy_description': self._get_strategy_description(strategy_type),  # ✅ ADICIONADO
-            'main_tf': config['main_tf'],
+            'strategy_description': self._get_strategy_description(strategy_type),
+            'trend_tf': config['trend_tf'],
             'confirmation_tf': config['confirmation_tf'],
             'entry_tf': config['entry_tf'],
             'timeframes': config['timeframes'],
@@ -240,7 +231,6 @@ class TopDownDataManager:
         }
 
     def _get_strategy_description(self, strategy_type: str) -> str:
-        """Descrição amigável das estratégias"""
         descriptions = {
             'position_trading': 'Long-term trends (weeks to months)',
             'swing_trading': 'Medium-term swings (days to weeks)', 
@@ -251,7 +241,6 @@ class TopDownDataManager:
         return descriptions.get(strategy_type, 'Unknown strategy')
 
     def _is_cache_valid(self, cache_key: str, strategy_type: str) -> bool:
-        """Verifica se o cache é válido"""
         if cache_key not in self._cache:
             return False
             
@@ -263,7 +252,6 @@ class TopDownDataManager:
         return (datetime.now() - cache_time).total_seconds() < ttl
 
     def clear_cache(self, symbol: str = None):
-        """Limpa cache (para testes ou dados stale)"""
         if symbol:
             keys_to_remove = [k for k in self._cache.keys() if symbol in k]
             for key in keys_to_remove:
