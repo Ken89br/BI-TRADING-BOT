@@ -120,7 +120,7 @@ class TopDownDataManager:
             Dict com 3 timeframes: {trend_tf: DataFrame, confirmation_tf: DataFrame, entry_tf: DataFrame}
         """
         if trend_tf not in self.TIMEFRAME_TO_STYLE:
-            raise ValueError(f"Timeframe principal inválido: {trend_tf}. "
+            raise ValueError(f"Timeframe principal inválido: {trend_tf}."
                            f"Use: {list(self.TIMEFRAME_TO_STYLE.keys())}")
         
         strategy_type = self.TIMEFRAME_TO_STYLE[trend_tf]
