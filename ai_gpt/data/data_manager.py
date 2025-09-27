@@ -85,7 +85,7 @@ class TopDownDataManager:
     }
     
     # MAPEAMENTO DE TIMEFRAMES PRINCIPAIS
-    TIMEFRAME_TO_STRATEGY = {
+    TIMEFRAME_TO_STYLE = {
         '1W': 'position_trading',
         '1D': 'swing_trading', 
         '6H': 'day_trading',
@@ -119,11 +119,11 @@ class TopDownDataManager:
         Returns:
             Dict com 3 timeframes: {trend_tf: DataFrame, confirmation_tf: DataFrame, entry_tf: DataFrame}
         """
-        if trend_tf not in self.TIMEFRAME_TO_STRATEGY:
+        if trend_tf not in self.TIMEFRAME_TO_STYLE:
             raise ValueError(f"Timeframe principal inválido: {trend_tf}. "
-                           f"Use: {list(self.TIMEFRAME_TO_STRATEGY.keys())}")
+                           f"Use: {list(self.TIMEFRAME_TO_STYLE.keys())}")
         
-        strategy_type = self.TIMEFRAME_TO_STRATEGY[trend_tf]
+        strategy_type = self.TIMEFRAME_TO_STYLE[trend_tf]
         config = self._find_config(strategy_type, trend_tf)
         
         if not config:
@@ -132,7 +132,7 @@ class TopDownDataManager:
         return self._fetch_hierarchical_data(symbol, config, strategy_type)
 
     def _find_config(self, strategy_type: str, trend_tf: str) -> Optional[Dict]:
-        for config in self.TOP_DOWN_STRATEGIES.get(strategy_type, []):
+        for config in self.TRADING_STYLE.get(strategy_type, []):
             if config['trend_tf'] == trend_tf:
                 return config
         return None
@@ -208,13 +208,13 @@ class TopDownDataManager:
             return None
 
     def get_available_trend_timeframes(self) -> List[str]:
-        return list(self.TIMEFRAME_TO_STRATEGY.keys())
+        return list(self.TIMEFRAME_TO_STYLE.keys())
 
     def get_strategy_info(self, trend_tf: str) -> Dict:
-        if trend_tf not in self.TIMEFRAME_TO_STRATEGY:
+        if trend_tf not in self.TIMEFRAME_TO_STYLE:
             return {}
         
-        strategy_type = self.TIMEFRAME_TO_STRATEGY[trend_tf]
+        strategy_type = self.TIMEFRAME_TO_STYLE[trend_tf]
         config = self._find_config(strategy_type, trend_tf)
         
         if not config:
